@@ -14,6 +14,8 @@ import {
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { colors, typography } from '../theme';
+import { fetchJson } from '../utils/api';
+import { fetchMediaDetails, getMediaTargetScreen } from '../utils/media';
 
 const { width } = Dimensions.get('window');
 
@@ -23,7 +25,7 @@ export default function RandomScreen({ navigation }) {
   const [filterVisible, setFilterVisible] = useState(false);
   const [selectedType, setSelectedType] = useState('movie');   // 'movie' or 'tv'
   const [selectedGenre, setSelectedGenre] = useState(null);    // TMDB genre ID or null (no filter)
-    const [selectedYear, setSelectedYear] = useState(null);
+  const [selectedYear, setSelectedYear] = useState(null);
   useEffect(() => {
     // Fetch an initial random item on mount
     fetchRandomContent(selectedType, selectedGenre);
@@ -32,10 +34,11 @@ export default function RandomScreen({ navigation }) {
   const fetchRandomContent = async (type, genreId) => {
     try {
       setLoading(true);
-      const genreParam = genreId ? `&genreId=${genreId}` : '';
-      const yearParam = selectedYear ? `&year=${selectedYear}` : '';
-      const res = await fetch(`https://streamcircleserver.onrender.com/random?type=${type}${genreParam}${yearParam}`);
-      const data = await res.json();
+      const data = await fetchJson('/random', {
+        type,
+        genreId: genreId || undefined,
+        year: selectedYear || undefined,
+      });
       if (data) {
         // Normalize some fields for easy display
         const year = data.release_date ? data.release_date.slice(0, 4) : 'N/A';
@@ -61,12 +64,8 @@ export default function RandomScreen({ navigation }) {
   const handleWatchNow = async () => {
     if (!randomItem) return;
     try {
-      // Fetch full details (including stream info) then navigate
-      const res = await fetch(
-        `https://streamcircleserver.onrender.com/details?id=${randomItem.tmdb_id}&type=${randomItem.type}`
-      );
-      const data = await res.json();
-      const targetScreen = data.type === 'tv' ? 'TVDetailScreen' : 'PlayerScreen';
+      const data = await fetchMediaDetails({ tmdb_id: randomItem.tmdb_id, type: randomItem.type });
+      const targetScreen = getMediaTargetScreen(data.type || randomItem.type);
       navigation.navigate(targetScreen, { data });
     } catch (err) {
       console.error('Failed to fetch details for playback:', err);

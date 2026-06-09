@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState,useEffect  } from 'react';
+import React, { useMemo, useRef, useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -8,25 +8,49 @@ import {
   Platform,
   ScrollView,
   ImageBackground,
+  ActivityIndicator,
+  Alert,
+  Linking,
 } from 'react-native';
 import { WebView } from 'react-native-webview';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
-import * as WebBrowser from 'expo-web-browser';
-import * as Device from 'expo-device';
 import { colors } from '../theme';
+import { isFavorite, toggleFavorite } from '../utils/favorites';
+import { fetchJson } from '../utils/api';
 
 const { width } = Dimensions.get('window');
 const VIDEO_HEIGHT = (width * 9) / 16;
 
+function pickRandomItem(items) {
+  return items[Math.floor(Math.random() * items.length)];
+}
+
+function shuffleItems(items) {
+  return [...items].sort(() => Math.random() - 0.5);
+}
+
+function normalizeEpisodes(items = []) {
+  return items.filter((item) => Number.isInteger(item?.episode_number) && item.episode_number > 0);
+}
+
+function normalizeSeasons(items = []) {
+  return items.filter((item) => Number.isInteger(item?.season_number) && item.season_number > 0);
+}
+
 export default function EpisodePlayerScreen({ route }) {
-  const navigation = useNavigation();
-  const { tmdb_id, season, episode, episodes, imdb_id, tvdb_id } = route.params;
+  const navigation = useNavigation<any>();
+  const { tmdb_id, season, episode, episodes, seasons, imdb_id, tvdb_id, show } = route.params;
   const [uiEpisode, setUiEpisode] = useState(episode);
   const [webKey, setWebKey] = useState(0);
-  const [activeServer, setActiveServer] = useState('server3');
+  const [activeServer, setActiveServer] = useState('server1');
+  const [favorited, setFavorited] = useState(false);
+  const [randomLoading, setRandomLoading] = useState(false);
+  const [availableSeasons, setAvailableSeasons] = useState(() =>
+    normalizeSeasons(Array.isArray(seasons) ? seasons : [])
+  );
 
   const webRef = useRef(null);
   // ✅ keeps the latest episode number for callbacks (prevents stale closure issues)
@@ -39,8 +63,81 @@ export default function EpisodePlayerScreen({ route }) {
     setUiEpisode(episode);
     episodeRef.current = episode;
   }, [episode]);
- const currentEpisode = episodes?.find((ep) => ep.episode_number === uiEpisode);
-const nextEpisode = episodes?.find((ep) => ep.episode_number === uiEpisode + 1);
+
+  useEffect(() => {
+    setAvailableSeasons(normalizeSeasons(Array.isArray(seasons) ? seasons : []));
+  }, [seasons]);
+
+  const favoriteItem = useMemo(() => {
+    if (!show?.title) {
+      return null;
+    }
+
+    return {
+      tmdb_id: show.tmdb_id || tmdb_id,
+      type: 'tv',
+      title: show.title,
+      poster: show.poster || null,
+      backdrop: show.backdrop || null,
+      release_date: show.release_date || null,
+    };
+  }, [show, tmdb_id]);
+
+  useEffect(() => {
+    const loadFavoriteState = async () => {
+      if (!favoriteItem) {
+        setFavorited(false);
+        return;
+      }
+
+      const favoriteState = await isFavorite(favoriteItem.tmdb_id, favoriteItem.type);
+      setFavorited(favoriteState);
+    };
+
+    loadFavoriteState();
+  }, [favoriteItem]);
+
+  useEffect(() => {
+    let isActive = true;
+
+    const loadSeasons = async () => {
+      if (availableSeasons.length || !tmdb_id) {
+        return;
+      }
+
+      try {
+        const details = await fetchJson('/details', { id: tmdb_id, type: 'tv' });
+
+        if (isActive) {
+          setAvailableSeasons(normalizeSeasons(Array.isArray(details?.seasons) ? details.seasons : []));
+        }
+      } catch (error) {
+        console.error('Failed to load seasons for episode player:', error);
+      }
+    };
+
+    loadSeasons();
+
+    return () => {
+      isActive = false;
+    };
+  }, [availableSeasons.length, tmdb_id]);
+
+  const currentSeasonEpisodes = normalizeEpisodes(Array.isArray(episodes) ? episodes : []);
+  const currentEpisode = currentSeasonEpisodes.find((ep) => ep.episode_number === uiEpisode);
+  const nextEpisode = currentSeasonEpisodes.find((ep) => ep.episode_number === uiEpisode + 1);
+  const navigateToEpisode = (nextSeason, nextEpisodeNumber, nextEpisodes) => {
+    navigation.replace('EpisodePlayerScreen', {
+      tmdb_id,
+      season: nextSeason,
+      episode: nextEpisodeNumber,
+      episodes: nextEpisodes,
+      seasons: availableSeasons,
+      imdb_id,
+      tvdb_id,
+      show,
+    });
+  };
 const tryHandleFromRedirectUrl = (url) => {
   if (!url) return;
 
@@ -59,17 +156,17 @@ const tryHandleFromRedirectUrl = (url) => {
   // ✅ Unified embed URL logic for all 3 servers
   const embedUrl =
     activeServer === 'server1'
-      ? `https://vidsrc.to/embed/tv/${tmdb_id}/${season}/${episode}?autoplay=1`
+      ? `https://vidsrc-embed.ru/embed/tv?${imdb_id ? `imdb=${imdb_id}` : `tmdb=${tmdb_id}`}&season=${season}&episode=${episode}&autoplay=1&autonext=1`
       : activeServer === 'server2'
       ? `https://embed.q62movies.ws/tv-show?tvdbId=${tvdb_id || tmdb_id}&s=${season}&e=${episode}`
-      : `https://vidsrc.xyz/embed/tv?${imdb_id ? `imdb=${imdb_id}` : `tmdb=${tmdb_id}`}&season=${season}&episode=${episode}&autoplay=1&autonext=1`;
+      : `https://vidsrc.to/embed/tv/${tmdb_id}/${season}/${episode}?autoplay=1`;
 
-  const isIpad =
-    Platform.OS === 'ios' && Device.deviceType === Device.DeviceType.TABLET;
+  const isIos = Platform.OS === 'ios';
 
   // ✅ Allowlist the embed providers you use
   const allowedHosts = useMemo(() => {
     const base = [
+      'vsembed.ru',
       'vidsrc.to',
       'embed.q62movies.ws',
       'vidsrc.xyz',
@@ -99,7 +196,7 @@ const tryHandleFromRedirectUrl = (url) => {
   };
     // ✅ Watch the iframe src. When it changes (autonext), send it to RN.
 const injectedJavaScript = useMemo(() => {
-  if (activeServer !== 'server3') return 'true;';
+  if (activeServer !== 'server1') return 'true;';
 
   return `
     (function () {
@@ -181,7 +278,7 @@ const injectedJavaScript = useMemo(() => {
 
 
 const handlePossibleEpisodeUrl = (maybeUrl?: string) => {
-  if (activeServer !== 'server3') return;
+  if (activeServer !== 'server1') return;
 
   const url = String(maybeUrl || '');
 
@@ -193,26 +290,74 @@ const handlePossibleEpisodeUrl = (maybeUrl?: string) => {
   if (!Number.isFinite(nextEpNum)) return;
   if (nextEpNum === episodeRef.current) return;
 
-  const updatedEpisode = episodes?.find(
+  const updatedEpisode = currentSeasonEpisodes.find(
     (ep) => ep.episode_number === nextEpNum
   );
   if (!updatedEpisode) return;
 
   console.log('AUTO-NEXT → EPISODE', nextEpNum);
 
-  navigation.replace('EpisodePlayerScreen', {
-    tmdb_id,
-    season,
-    episode: nextEpNum,
-    episodes,
-    imdb_id,
-    tvdb_id,
-  });
+  navigateToEpisode(season, nextEpNum, currentSeasonEpisodes);
 };
 
+const handleToggleFavorite = async () => {
+  if (!favoriteItem) {
+    console.warn('No show metadata available to favorite from this episode screen.');
+    return;
+  }
 
+  try {
+    const result = await toggleFavorite(favoriteItem);
+    setFavorited(result.isFavorite);
+  } catch (error) {
+    console.error('Failed to toggle show favorite:', error);
+  }
+};
 
+const fetchSeasonEpisodes = async (seasonNumber) => {
+  if (seasonNumber === season) {
+    return currentSeasonEpisodes;
+  }
 
+  try {
+    const data = await fetchJson('/episodes', { tv_id: tmdb_id, season: seasonNumber });
+    return normalizeEpisodes(Array.isArray(data) ? data : []);
+  } catch (error) {
+    console.error(`Failed to fetch season ${seasonNumber} episodes:`, error);
+    return [];
+  }
+};
+
+const handleRandomEpisode = async () => {
+  if (!availableSeasons.length) {
+    Alert.alert('No seasons available', 'This show does not have any playable seasons yet.');
+    return;
+  }
+
+  try {
+    setRandomLoading(true);
+    const seasonsToTry = shuffleItems(availableSeasons);
+
+    for (const seasonItem of seasonsToTry) {
+      const seasonEpisodes = await fetchSeasonEpisodes(seasonItem.season_number);
+
+      if (!seasonEpisodes.length) {
+        continue;
+      }
+
+      const chosenEpisode = pickRandomItem(seasonEpisodes);
+      navigateToEpisode(seasonItem.season_number, chosenEpisode.episode_number, seasonEpisodes);
+      return;
+    }
+
+    Alert.alert('No episodes available', 'We could not find a playable random episode for this show.');
+  } catch (error) {
+    console.error('Failed to pick random episode from player screen:', error);
+    Alert.alert('Random pick failed', 'We could not load a random episode right now.');
+  } finally {
+    setRandomLoading(false);
+  }
+};
 
   return (
     <ImageBackground
@@ -234,8 +379,8 @@ const handlePossibleEpisodeUrl = (maybeUrl?: string) => {
         </BlurView>
 
         <BlurView intensity={30} tint="dark" style={styles.topButton}>
-          <TouchableOpacity onPress={() => {}}>
-            <Ionicons name="bookmark-outline" size={20} color="white" />
+          <TouchableOpacity onPress={handleToggleFavorite} disabled={!favoriteItem} style={!favoriteItem ? styles.disabledIcon : null}>
+            <Ionicons name={favorited ? 'heart' : 'bookmark-outline'} size={20} color={favorited ? '#ef4444' : 'white'} />
           </TouchableOpacity>
         </BlurView>
       </View>
@@ -252,17 +397,27 @@ const handlePossibleEpisodeUrl = (maybeUrl?: string) => {
             source={{ uri: embedUrl }}
             originWhitelist={['*']}
             javaScriptEnabled
-            
-            // ✅ NEW: listens for iframe autonext
-             injectedJavaScript={`
-    (function () {
-      try {
-        window.ReactNativeWebView.postMessage("INJECT_OK");
-      } catch (e) {}
-    })();
-    true;
-  `}
-  onMessage={(e) => console.log("WV:", e.nativeEvent.data)}r
+            injectedJavaScript={injectedJavaScript}
+            allowsInlineMediaPlayback
+            allowsPictureInPictureMediaPlayback
+            allowsAirPlayForMediaPlayback
+            onMessage={(event) => {
+              const message = event.nativeEvent.data;
+
+              if (!message || message === 'INJECT_OK') {
+                return;
+              }
+
+              try {
+                const parsed = JSON.parse(message);
+
+                if (parsed?.type === 'IFRAME_SRC') {
+                  handlePossibleEpisodeUrl(parsed.url);
+                }
+              } catch {
+                handlePossibleEpisodeUrl(message);
+              }
+            }}
             allowsFullscreenVideo
             mediaPlaybackRequiresUserAction={false}
             setSupportMultipleWindows={false}
@@ -338,14 +493,14 @@ const handlePossibleEpisodeUrl = (maybeUrl?: string) => {
           </Text>
         </TouchableOpacity>
 
-        {/* Safari Fallback */}
-        {isIpad && (
+        {/* Safari fallback for more reliable AirPlay / remote playback */}
+        {isIos && (
           <TouchableOpacity
             style={[
               styles.serverButton,
               { backgroundColor: '#64748b', marginTop: 0 },
             ]}
-            onPress={() => WebBrowser.openBrowserAsync(embedUrl)}
+            onPress={() => Linking.openURL(embedUrl)}
           >
             <Ionicons name="globe-outline" size={16} color="white" />
             <Text style={styles.serverText}>Open in Safari</Text>
@@ -358,6 +513,21 @@ const handlePossibleEpisodeUrl = (maybeUrl?: string) => {
             {currentEpisode?.name || `Episode ${uiEpisode}`}
           </Text>
           <Text style={styles.meta}>{currentEpisode?.air_date}</Text>
+
+          <TouchableOpacity
+            style={[styles.randomBtn, randomLoading && styles.disabledButton]}
+            onPress={handleRandomEpisode}
+            disabled={randomLoading}
+          >
+            {randomLoading ? (
+              <ActivityIndicator size="small" color="white" />
+            ) : (
+              <Ionicons name="shuffle-outline" size={16} color="white" />
+            )}
+            <Text style={styles.randomBtnText}>Random Episode From This Show</Text>
+          </TouchableOpacity>
+          <Text style={styles.randomHint}>Pulls a random episode from any season.</Text>
+
           <Text style={styles.description}>
             {currentEpisode?.overview || 'No description available.'}
           </Text>
@@ -365,16 +535,7 @@ const handlePossibleEpisodeUrl = (maybeUrl?: string) => {
           {nextEpisode && (
             <TouchableOpacity
               style={styles.nextBtn}
-              onPress={() =>
-                navigation.replace('EpisodePlayerScreen', {
-                  tmdb_id,
-                  season,
-                  episode: nextEpisode.episode_number,
-                  episodes,
-                  imdb_id,
-                  tvdb_id,
-                })
-              }
+              onPress={() => navigateToEpisode(season, nextEpisode.episode_number, currentSeasonEpisodes)}
             >
               <Text style={styles.nextBtnText}>
                 ▶ Watch Next: {nextEpisode.name}
@@ -398,6 +559,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   topButton: { padding: 8, borderRadius: 18, overflow: 'hidden' },
+  disabledIcon: { opacity: 0.45 },
   videoWrapper: {
     width: width * 0.92,
     height: VIDEO_HEIGHT,
@@ -427,6 +589,24 @@ const styles = StyleSheet.create({
   infoSection: { padding: 20 },
   title: { fontSize: 22, fontWeight: '700', color: 'white', marginBottom: 6 },
   meta: { color: '#94A3B8', fontSize: 14, marginBottom: 14 },
+  randomBtn: {
+    marginBottom: 8,
+    backgroundColor: colors.buttonSecondary,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 8,
+  },
+  randomBtnText: { color: 'white', fontWeight: '600', fontSize: 14 },
+  randomHint: {
+    color: '#94A3B8',
+    fontSize: 13,
+    marginBottom: 16,
+    textAlign: 'center',
+  },
   description: { color: '#CBD5E1', fontSize: 15, lineHeight: 22 },
   nextBtn: {
     marginTop: 24,
@@ -436,5 +616,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   nextBtnText: { color: 'white', fontWeight: '600', fontSize: 16 },
+  disabledButton: { opacity: 0.7 },
 });
   

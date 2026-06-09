@@ -13,6 +13,8 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { colors, typography } from '../theme';
+import { fetchJson } from '../utils/api';
+import { fetchMediaDetails, getMediaTargetScreen } from '../utils/media';
 const { width } = Dimensions.get('window');
 const FEATURED_HEIGHT = 200;
 const POSTER_WIDTH = width / 3.2;
@@ -61,10 +63,10 @@ export default function GenreScreen({ route, navigation }) {
 
     try {
       const [movieTop, movieCombos, tvTop, tvCombos] = await Promise.all([
-        fetch(`https://streamcircleserver.onrender.com/genre/top?id=${GENRE_ID_MAP[genreId]?.movie || genreId}&type=movie`).then(res => res.json()),
-        fetch(`https://streamcircleserver.onrender.com/genre/combos?id=${GENRE_ID_MAP[genreId]?.movie || genreId}&type=movie`).then(res => res.json()),
-        fetch(`https://streamcircleserver.onrender.com/genre/top?id=${GENRE_ID_MAP[genreId]?.tv || genreId}&type=tv`).then(res => res.json()),
-        fetch(`https://streamcircleserver.onrender.com/genre/combos?id=${GENRE_ID_MAP[genreId]?.tv || genreId}&type=tv`).then(res => res.json())
+        fetchJson('/genre/top', { id: GENRE_ID_MAP[genreId]?.movie || genreId, type: 'movie' }),
+        fetchJson('/genre/combos', { id: GENRE_ID_MAP[genreId]?.movie || genreId, type: 'movie' }),
+        fetchJson('/genre/top', { id: GENRE_ID_MAP[genreId]?.tv || genreId, type: 'tv' }),
+        fetchJson('/genre/combos', { id: GENRE_ID_MAP[genreId]?.tv || genreId, type: 'tv' }),
       ]);
 
       const newCache = {
@@ -88,16 +90,16 @@ useEffect(() => {
     setTopPicks(cache[mode].topPicks);
     setCombos(cache[mode].combos);
   }
-}, [mode]);
+}, [cache, mode]);
 
 
 const openDetails = async (id) => {
-  const res = await fetch(`https://streamcircleserver.onrender.com/details?id=${id}&type=${mode}`);
-  const data = await res.json();
-
-  const targetScreen = data.type === 'tv' ? 'TVDetailScreen' : 'PlayerScreen';
-
- navigation.push(targetScreen, { data });
+  try {
+    const data = await fetchMediaDetails({ tmdb_id: id, type: mode });
+    navigation.push(getMediaTargetScreen(data.type || mode), { data });
+  } catch (error) {
+    console.error('Failed to open genre detail:', error);
+  }
 };
   const formatRuntime = (min) => {
     const h = Math.floor(min / 60);
@@ -134,8 +136,7 @@ const openDetails = async (id) => {
               onSubmitEditing={() => {
                 if (searchQuery.trim()) {
                   navigation.navigate('SearchResultScreen', {
-                    query: searchQuery,
-                    type: mode,
+                    query: searchQuery.trim(),
                   });
                   setSearchQuery('');
                   setShowSearch(false);

@@ -6,6 +6,8 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import FilterModal from '../modals/FilterModal';
 import { colors, typography } from '../theme';
+import { fetchJson } from '../utils/api';
+import { fetchMediaDetails, getMediaTargetScreen } from '../utils/media';
 
 const { width } = Dimensions.get('window');
 const CARD_WIDTH = width / 2.2;
@@ -44,8 +46,7 @@ export default function ViewAllScreen({ route, navigation }) {
     }
 
     try {
-      const res = await fetch(`https://streamcircleserver.onrender.com/genre/viewall?${query.toString()}`);
-      const data = await res.json();
+      const data = await fetchJson('/genre/viewall', Object.fromEntries(query.entries()));
 
       const seen = new Set(items.map(i => i.tmdb_id));
       const uniqueNew = data.filter(item => !seen.has(item.tmdb_id));
@@ -64,10 +65,12 @@ export default function ViewAllScreen({ route, navigation }) {
   };
 
   const openDetails = async (id) => {
-    const res = await fetch(`https://streamcircleserver.onrender.com/details?id=${id}&type=${type}`);
-    const data = await res.json();
-    const screen = type === 'tv' ? 'TVDetailScreen' : 'PlayerScreen';
-    navigation.navigate(screen, { data });
+    try {
+      const data = await fetchMediaDetails({ tmdb_id: id, type });
+      navigation.navigate(getMediaTargetScreen(data.type || type), { data });
+    } catch (error) {
+      console.error('Failed to open view-all detail:', error);
+    }
   };
 
   const renderItem = ({ item }) => (

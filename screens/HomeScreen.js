@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -14,7 +14,11 @@ import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { colors, typography } from '../theme';
 import * as SplashScreen from 'expo-splash-screen';
-import { useCallback } from 'react';
+import { fetchJson } from '../utils/api';
+import CollectionRail from '../components/CollectionRail';
+import { fetchMediaDetails, getMediaTargetScreen, normalizeMediaItem } from '../utils/media';
+
+const curatedTvCollectionConfig = require('../data/curatedTvCollections');
 
 const { width } = Dimensions.get('window');
 const POSTER_WIDTH = width / 3.2;
@@ -26,12 +30,21 @@ export default function HomeScreen({ navigation }) {
   const [preloadedData, setPreloadedData] = useState({ movie: {}, tv: {} });
   const [genreRows, setGenreRows] = useState({});
   const [mediaFilter, setMediaFilter] = useState('movie');
-  const [genreCache, setGenreCache] = useState({ movie: {}, tv: {} });
   const [loading, setLoading] = useState(true);
+  const [curatedTvCollections, setCuratedTvCollections] = useState([]);
+  const [curatedTvLoading, setCuratedTvLoading] = useState(false);
 
   
   useEffect(() => {
-    preloadAll();
+    const initialize = async () => {
+      try {
+        await Promise.all([preloadAll(), fetchCuratedTvCollections()]);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    initialize();
   }, []);
 
   useEffect(() => {
@@ -40,15 +53,70 @@ export default function HomeScreen({ navigation }) {
 
   const preloadAll = async () => {
     try {
-      const [movieRes, tvRes] = await Promise.all([
-        fetch(`https://streamcircleserver.onrender.com/preload?type=movie`).then(res => res.json()),
-        fetch(`https://streamcircleserver.onrender.com/preload?type=tv`).then(res => res.json())
-      ]);
-      setPreloadedData({ movie: movieRes, tv: tvRes });
+      const preloadData = await fetchJson('/preload');
+      setPreloadedData({
+        movie: {
+          trending: preloadData.trending || [],
+          nowPlaying: preloadData.nowPlaying || [],
+          topRated: preloadData.topRated || [],
+          editors: preloadData.editors || [],
+          upcoming: preloadData.upcoming || [],
+        },
+        tv: {
+          tvTrending: preloadData.tvTrending || [],
+          tvTopRated: preloadData.tvTopRated || [],
+        },
+      });
     } catch (err) {
       console.error('Preload failed:', err);
     }
   };
+
+  const hydrateCuratedTvCollectionsFallback = async () => {
+    const hydratedCollections = await Promise.all(
+      curatedTvCollectionConfig.map(async (collection) => {
+        const items = await Promise.all(
+          collection.items.map(async (tmdb_id) => {
+            try {
+              const details = await fetchMediaDetails({ tmdb_id, type: 'tv' });
+              return normalizeMediaItem(details, 'tv');
+            } catch (error) {
+              console.error(`Fallback curated TV lookup failed for ${tmdb_id}:`, error);
+              return null;
+            }
+          })
+        );
+
+        return {
+          ...collection,
+          items: items.filter(Boolean),
+        };
+      })
+    );
+
+    return hydratedCollections.filter((collection) => collection.items.length > 0);
+  };
+
+  const fetchCuratedTvCollections = async () => {
+    try {
+      setCuratedTvLoading(true);
+      const data = await fetchJson('/collections/tv/curated');
+      setCuratedTvCollections(Array.isArray(data) ? data : []);
+    } catch (error) {
+      console.error('Curated TV collections failed:', error);
+
+      try {
+        const fallbackCollections = await hydrateCuratedTvCollectionsFallback();
+        setCuratedTvCollections(fallbackCollections);
+      } catch (fallbackError) {
+        console.error('Curated TV fallback failed:', fallbackError);
+        setCuratedTvCollections([]);
+      }
+    } finally {
+      setCuratedTvLoading(false);
+    }
+  };
+
   const onLayoutRootView = useCallback(async () => {
   if (!loading) {
     await SplashScreen.hideAsync();
@@ -56,8 +124,7 @@ export default function HomeScreen({ navigation }) {
 }, [loading]);
   const fetchGenreRows = async () => {
     try {
-      const res = await fetch(`https://streamcircleserver.onrender.com/homepage/genres?type=${mediaFilter}`);
-      const data = await res.json();
+      const data = await fetchJson('/homepage/genres', { type: mediaFilter });
       setGenreRows(data);
     } catch (err) {
       console.error('Genre rows failed:', err);
@@ -67,15 +134,18 @@ export default function HomeScreen({ navigation }) {
   const fetchSearch = () => {
     if (!query.trim()) return;
     navigation.navigate('SearchResultScreen', {
-      query,
-      type: mediaFilter,
+      query: query.trim(),
     });
   };
 
-  const openDetails = async (id) => {
-    const res = await fetch(`https://streamcircleserver.onrender.com/details?id=${id}&type=${mediaFilter}`);
-    const data = await res.json();
-    navigation.navigate(mediaFilter === 'movie' ? 'PlayerScreen' : 'TVDetailScreen', { data });
+  const openDetails = async (item) => {
+    try {
+      const type = item.type || mediaFilter;
+      const data = await fetchMediaDetails({ tmdb_id: item.tmdb_id, type });
+      navigation.navigate(getMediaTargetScreen(type), { data });
+    } catch (error) {
+      console.error('Failed to open media details:', error);
+    }
   };
 
   const formatRuntime = (min) => {
@@ -85,7 +155,7 @@ export default function HomeScreen({ navigation }) {
   };
 
   const renderPoster = (item) => (
-    <TouchableOpacity onPress={() => openDetails(item.tmdb_id)} style={styles.posterCard}>
+    <TouchableOpacity onPress={() => openDetails(item)} style={styles.posterCard}>
       <Image source={{ uri: item.poster }} style={styles.posterImage} />
     </TouchableOpacity>
   );
@@ -167,7 +237,7 @@ const renderSection = (iconName, title, data) => (
           contentContainerStyle={{ paddingLeft: 16 }}
           renderItem={({ item }) => (
             <TouchableOpacity
-              onPress={() => openDetails(item.tmdb_id)}
+              onPress={() => openDetails(item)}
               style={styles.featuredCard}
               activeOpacity={0.9}
             >
@@ -196,6 +266,18 @@ const renderSection = (iconName, title, data) => (
 <View style={{ display: mediaFilter === 'tv' ? 'flex' : 'none' }}>
   {renderSection('flame-outline', 'Trending', preloadedData.tv.tvTrending)}
   {renderSection('star-outline', 'Top Rated', preloadedData.tv.tvTopRated)}
+  {curatedTvCollections.map((collection) => (
+    <CollectionRail
+      key={collection.id}
+      title={collection.title}
+      subtitle={collection.subtitle}
+      items={collection.items}
+      mediaType="tv"
+      loading={curatedTvLoading}
+      emptyText=""
+      onPressItem={openDetails}
+    />
+  ))}
 </View>
 </View>
 

@@ -32,6 +32,11 @@ export const typography = {
     fontSize: 14,
     color: colors.textPrimary,
   },
+  button: {
+    fontFamily: 'Inter-SemiBold',
+    fontSize: 14,
+    color: colors.textPrimary,
+  },
   muted: {
     fontFamily: 'Inter-Regular',
     fontSize: 13,

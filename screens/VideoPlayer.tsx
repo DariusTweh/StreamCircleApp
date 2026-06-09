@@ -7,12 +7,11 @@ import {
   Dimensions,
   Platform,
   ScrollView,
+  Linking,
 } from 'react-native';
 import { WebView } from 'react-native-webview';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
-import * as WebBrowser from 'expo-web-browser';
-import * as Device from 'expo-device';
 import { colors } from '../theme';
 
 const { width } = Dimensions.get('window');
@@ -20,13 +19,12 @@ export default function VideoPlayer({ route }) {
   const navigation = useNavigation();
   const { embedUrls, embedUrl, title } = route.params;
 
-  const [activeServer, setActiveServer] = useState('server3');
+  const [activeServer, setActiveServer] = useState('server1');
   const [webKey, setWebKey] = useState(0);
 
   const webRef = useRef(null);
 
-  const isIpad =
-    Platform.OS === 'ios' && Device.deviceType === Device.DeviceType.TABLET;
+  const isIos = Platform.OS === 'ios';
 
   // ✅ Sanitize and resolve relative URLs to full https links
   const resolveUrl = (url) => {
@@ -47,10 +45,12 @@ export default function VideoPlayer({ route }) {
 // ✅ Allowlist ONLY your embed providers
 const allowedHosts = useMemo(() => {
   const base = [
+    'vsembed.ru',
     'vidsrcme.su',
     'embed.q62movies.ws',
     'vidsrc-embed.ru',
     'vidsrc.to',
+    'vidsrc.xyz',
     'www.vidsrc.to',
   ];
   return Array.from(new Set(base.flatMap(h => [h, `www.${h}`])));
@@ -91,6 +91,9 @@ const isBlockedAdHost = (url) => {
           originWhitelist={['*']}
           javaScriptEnabled
           allowsFullscreenVideo
+          allowsInlineMediaPlayback
+          allowsPictureInPictureMediaPlayback
+          allowsAirPlayForMediaPlayback
           mediaPlaybackRequiresUserAction={false}
           setSupportMultipleWindows={false}
           javaScriptCanOpenWindowsAutomatically={false}
@@ -165,11 +168,11 @@ const isBlockedAdHost = (url) => {
           </TouchableOpacity>
         )}
 
-        {/* Open in Safari (iPad only) */}
-        {isIpad && (
+        {/* Open in Safari for better system playback controls */}
+        {isIos && (
           <TouchableOpacity
             style={[styles.serverButton, { marginTop: 12, backgroundColor: '#64748b' }]}
-            onPress={() => WebBrowser.openBrowserAsync(finalUrl)}
+            onPress={() => Linking.openURL(finalUrl)}
           >
             <Ionicons name="globe-outline" size={16} color="white" />
             <Text style={styles.serverText}>Open in Safari</Text>

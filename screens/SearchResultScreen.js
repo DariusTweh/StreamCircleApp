@@ -1,66 +1,157 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
-  View, Text, StyleSheet, FlatList, TouchableOpacity, Image, TextInput
+  View,
+  Text,
+  StyleSheet,
+  FlatList,
+  TouchableOpacity,
+  Image,
+  TextInput,
+  ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, typography } from '../theme';
-export default function SearchResultScreen({ route, navigation }) {
-  const { query: initialQuery, type } = route.params;
-  const [query, setQuery] = useState(initialQuery);
-  const [results, setResults] = useState([]);
+import { fetchJson } from '../utils/api';
 
-  const genreMap = {
-    28: 'Action', 12: 'Adventure', 16: 'Animation', 35: 'Comedy',
-    80: 'Crime', 99: 'Documentary', 18: 'Drama', 10751: 'Family',
-    14: 'Fantasy', 36: 'History', 27: 'Horror', 10402: 'Music',
-    9648: 'Mystery', 10749: 'Romance', 878: 'Sci-Fi', 10770: 'TV Movie',
-    53: 'Thriller', 10752: 'War', 37: 'Western'
-  };
+const genreMap = {
+  28: 'Action',
+  12: 'Adventure',
+  16: 'Animation',
+  35: 'Comedy',
+  80: 'Crime',
+  99: 'Documentary',
+  18: 'Drama',
+  10751: 'Family',
+  14: 'Fantasy',
+  36: 'History',
+  27: 'Horror',
+  10402: 'Music',
+  9648: 'Mystery',
+  10749: 'Romance',
+  878: 'Sci-Fi',
+  10770: 'TV Movie',
+  53: 'Thriller',
+  10752: 'War',
+  37: 'Western',
+  10759: 'Action & Adventure',
+  10762: 'Kids',
+  10763: 'News',
+  10764: 'Reality',
+  10765: 'Sci-Fi & Fantasy',
+  10766: 'Soap',
+  10767: 'Talk',
+  10768: 'War & Politics',
+};
+
+function getYear(item) {
+  const date = item.release_date || item.first_air_date;
+  return date ? date.split('-')[0] : 'N/A';
+}
+
+function getRating(item) {
+  return typeof item.vote_average === 'number' ? item.vote_average.toFixed(1) : 'N/A';
+}
+
+function PosterArtwork({ item }) {
+  if (item.poster) {
+    return <Image source={{ uri: item.poster }} style={styles.poster} />;
+  }
+
+  return (
+    <View style={[styles.poster, styles.posterFallback]}>
+      <Ionicons name={item.type === 'tv' ? 'tv-outline' : 'film-outline'} size={24} color={colors.textMuted} />
+      <Text style={styles.posterFallbackText}>{item.type === 'tv' ? 'Series' : 'Movie'}</Text>
+    </View>
+  );
+}
+
+export default function SearchResultScreen({ route, navigation }) {
+  const { query: initialQuery } = route.params;
+  const [query, setQuery] = useState(initialQuery || '');
+  const [results, setResults] = useState([]);
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    fetchSearch(initialQuery);
-  }, []);
+    setQuery(initialQuery || '');
+    fetchSearch(initialQuery || '');
+  }, [initialQuery]);
 
-  const fetchSearch = async (q) => {
+  const fetchSearch = async (value) => {
+    const trimmedValue = value.trim();
+
+    if (!trimmedValue) {
+      setResults([]);
+      return;
+    }
+
     try {
-      const res = await fetch(`https://streamcircleserver.onrender.com/search?q=${encodeURIComponent(q)}&type=${type}`);
-      const data = await res.json();
-      setResults(data);
+      setLoading(true);
+      const data = await fetchJson('/search', { q: trimmedValue });
+      setResults(Array.isArray(data) ? data : []);
     } catch (err) {
       console.error('Search failed', err);
+      setResults([]);
+    } finally {
+      setLoading(false);
     }
   };
 
-  const openDetails = async (id) => {
-    const res = await fetch(`https://streamcircleserver.onrender.com/details?id=${id}&type=${type}`);
-    const data = await res.json();
-    navigation.navigate(type === 'movie' ? 'PlayerScreen' : 'TVDetailScreen', { data });
+  const openDetails = async (item) => {
+    try {
+      const data = await fetchJson('/details', {
+        id: item.tmdb_id,
+        type: item.type,
+      });
+
+      navigation.navigate(item.type === 'tv' ? 'TVDetailScreen' : 'PlayerScreen', { data });
+    } catch (error) {
+      console.error('Failed to open details:', error);
+    }
   };
 
-  const renderItem = ({ item }) => (
-    <TouchableOpacity style={styles.card} onPress={() => openDetails(item.tmdb_id)}>
-      <Image source={{ uri: item.poster }} style={styles.poster} />
-      <View style={{ flex: 1, marginLeft: 12 }}>
-        <Text style={styles.title}>{item.title}</Text>
-        <Text style={styles.genre}>
-          {(item.genre_ids || []).map(id => genreMap[id]).filter(Boolean).join(', ') || 'N/A'}
-        </Text>
-       <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', marginBottom: 4 }}>
-        <Ionicons name="star" size={12} color={colors.accent} />
-        <Text style={styles.meta}> {item.vote_average?.toFixed(1) || 'N/A'}   </Text>
+  const resultSummary = useMemo(() => {
+    const movies = results.filter((item) => item.type === 'movie').length;
+    const shows = results.filter((item) => item.type === 'tv').length;
 
-        <Ionicons name="calendar-outline" size={12} color={colors.textMuted} />
-        <Text style={styles.meta}> {item.release_date?.split('-')[0] || 'N/A'}   </Text>
+    return { movies, shows };
+  }, [results]);
 
-        <Ionicons name={item.adult ? 'warning-outline' : 'checkmark-circle-outline'} size={12} color={item.adult ? colors.danger : colors.accent} />
-        <Text style={styles.meta}> {item.adult ? '18+' : '13+'}</Text>
-      </View>
-        <Text style={styles.description} numberOfLines={2}>
-          {item.overview || 'No description available.'}
-        </Text>
-      </View>
-    </TouchableOpacity>
-  );
+  const renderItem = ({ item }) => {
+    const genres = (item.genre_ids || []).map((id) => genreMap[id]).filter(Boolean).slice(0, 3);
+
+    return (
+      <TouchableOpacity style={styles.card} onPress={() => openDetails(item)} activeOpacity={0.86}>
+        <PosterArtwork item={item} />
+
+        <View style={styles.cardContent}>
+          <View style={styles.cardHeader}>
+            <View style={[styles.badge, item.type === 'tv' && styles.badgeTv]}>
+              <Text style={[styles.badgeText, item.type === 'tv' && styles.badgeTextTv]}>
+                {item.type === 'tv' ? 'SERIES' : 'MOVIE'}
+              </Text>
+            </View>
+            <View style={styles.metaPill}>
+              <Ionicons name="star" size={12} color={colors.accent} />
+              <Text style={styles.metaPillText}>{getRating(item)}</Text>
+            </View>
+          </View>
+
+          <Text style={styles.title} numberOfLines={2}>
+            {item.title}
+          </Text>
+
+          <Text style={styles.subMeta}>
+            {getYear(item)}
+            {genres.length ? ` • ${genres.join(', ')}` : ''}
+          </Text>
+
+          <Text style={styles.description} numberOfLines={3}>
+            {item.overview || 'No overview available.'}
+          </Text>
+        </View>
+      </TouchableOpacity>
+    );
+  };
 
   return (
     <View style={styles.container}>
@@ -69,9 +160,7 @@ export default function SearchResultScreen({ route, navigation }) {
           <Ionicons name="arrow-back" size={24} color="white" />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Results</Text>
-        <TouchableOpacity>
-          <Ionicons name="options-outline" size={22} color="white" />
-        </TouchableOpacity>
+        <View style={styles.headerSpacer} />
       </View>
 
       <View style={styles.searchBar}>
@@ -81,23 +170,42 @@ export default function SearchResultScreen({ route, navigation }) {
           value={query}
           onChangeText={setQuery}
           onSubmitEditing={() => fetchSearch(query)}
-          placeholder="Search"
+          placeholder="Search movies and TV shows"
           placeholderTextColor="#94A3B8"
-          editable={true}
+          returnKeyType="search"
         />
-        <Ionicons name="mic-outline" size={18} color="#94A3B8" />
       </View>
 
-      <FlatList
-        data={results}
-        keyExtractor={(item, idx) => `${item.tmdb_id}-${idx}`}
-        renderItem={renderItem}
-        contentContainerStyle={{ paddingBottom: 30 }}
-      />
+      <View style={styles.summaryRow}>
+        <Text style={styles.summaryText}>{results.length} results</Text>
+        <Text style={styles.summaryText}>
+          {resultSummary.movies} movies • {resultSummary.shows} shows
+        </Text>
+      </View>
+
+      {loading ? (
+        <View style={styles.centerState}>
+          <ActivityIndicator size="large" color={colors.accent} />
+        </View>
+      ) : (
+        <FlatList
+          data={results}
+          keyExtractor={(item, idx) => `${item.type}-${item.tmdb_id}-${idx}`}
+          renderItem={renderItem}
+          contentContainerStyle={results.length ? styles.listContent : styles.emptyContent}
+          showsVerticalScrollIndicator={false}
+          ListEmptyComponent={
+            <View style={styles.centerState}>
+              <Ionicons name="search-outline" size={34} color={colors.textMuted} />
+              <Text style={styles.emptyTitle}>No matches found</Text>
+              <Text style={styles.emptyText}>Try another title, franchise, actor, or show name.</Text>
+            </View>
+          }
+        />
+      )}
     </View>
   );
 }
-
 
 const styles = StyleSheet.create({
   container: {
@@ -116,6 +224,9 @@ const styles = StyleSheet.create({
     ...typography.heading,
     fontSize: 18,
   },
+  headerSpacer: {
+    width: 24,
+  },
   searchBar: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -124,7 +235,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 10,
     marginHorizontal: 16,
-    marginBottom: 20,
   },
   input: {
     flex: 1,
@@ -132,38 +242,123 @@ const styles = StyleSheet.create({
     marginHorizontal: 8,
     ...typography.body,
   },
+  summaryRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    marginTop: 14,
+    marginBottom: 8,
+  },
+  summaryText: {
+    ...typography.muted,
+    fontSize: 12,
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+  },
+  listContent: {
+    paddingHorizontal: 16,
+    paddingBottom: 30,
+  },
+  emptyContent: {
+    flexGrow: 1,
+  },
   card: {
     flexDirection: 'row',
-    padding: 16,
-    paddingBottom: 12,
-    borderBottomWidth: 0.5,
-    borderBottomColor: colors.border,
+    backgroundColor: colors.card,
+    borderRadius: 18,
+    padding: 12,
+    marginTop: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(148,163,184,0.12)',
   },
   poster: {
-    width: 70,
-    height: 100,
-    borderRadius: 8,
-    backgroundColor: colors.card,
+    width: 84,
+    height: 124,
+    borderRadius: 12,
+    backgroundColor: '#162133',
+  },
+  posterFallback: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 10,
+  },
+  posterFallbackText: {
+    ...typography.muted,
+    fontSize: 11,
+    marginTop: 8,
+    textTransform: 'uppercase',
+  },
+  cardContent: {
+    flex: 1,
+    marginLeft: 12,
+  },
+  cardHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  badge: {
+    backgroundColor: 'rgba(250,204,21,0.14)',
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+  },
+  badgeTv: {
+    backgroundColor: 'rgba(37,99,235,0.18)',
+  },
+  badgeText: {
+    ...typography.body,
+    fontSize: 11,
+    fontWeight: '700',
+    color: colors.accent,
+    letterSpacing: 0.4,
+  },
+  badgeTextTv: {
+    color: '#93c5fd',
+  },
+  metaPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  metaPillText: {
+    ...typography.body,
+    fontSize: 12,
+    color: colors.textSecondary,
+    marginLeft: 4,
   },
   title: {
     ...typography.heading,
-    fontSize: 16,
-    marginBottom: 4,
+    fontSize: 17,
+    marginBottom: 6,
   },
-  genre: {
-    ...typography.body,
-    fontSize: 13,
-    color: colors.textSecondary,
-    marginBottom: 4,
-  },
-  meta: {
+  subMeta: {
     ...typography.muted,
     fontSize: 12,
-    marginBottom: 4,
+    marginBottom: 8,
   },
   description: {
     ...typography.body,
     fontSize: 13,
-    lineHeight: 18,
+    lineHeight: 19,
+    color: colors.textSecondary,
+  },
+  centerState: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 32,
+  },
+  emptyTitle: {
+    ...typography.heading,
+    fontSize: 18,
+    marginTop: 14,
+    marginBottom: 8,
+  },
+  emptyText: {
+    ...typography.body,
+    color: colors.textSecondary,
+    textAlign: 'center',
+    lineHeight: 21,
   },
 });
