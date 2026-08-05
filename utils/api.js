@@ -1,7 +1,7 @@
 import { Platform } from 'react-native';
 import Constants from 'expo-constants';
 
-const REMOTE_API_BASE_URL = 'https://streamcircleserver.onrender.com';
+const REMOTE_API_BASE_URL = 'https://streamcircleserver-ys5j.onrender.com';
 
 function normalizeBaseUrl(url) {
   return String(url || '').trim().replace(/\/+$/, '');
